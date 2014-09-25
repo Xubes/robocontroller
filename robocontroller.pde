@@ -1,11 +1,7 @@
 import procontroll.*;
 import java.io.*;
 import processing.serial.*;
-
-// Motor stuff
-Serial motorLeft;
-Serial motorRight;
-Serial motorChair;
+import java.util.ArrayList;
 
 // Controller stuff
 ControllIO controll;
@@ -21,6 +17,7 @@ ControllButton buttonUp;
 ControllButton buttonDown;
 ControllButton buttonTri;
 ControllButton buttonX;
+
 
 void setup(){
   size(640,480);
@@ -83,39 +80,51 @@ void setup(){
 }
 
 int clock = millis();
+
+// Motor stuff
+Serial motorLeft;
+Serial motorRight;
+Serial motorChair;
+ArrayList<Integer> qLeft = new ArrayList<Integer>(5);
+ArrayList<Integer> qRight = new ArrayList<Integer>(5);
+ArrayList<Integer> qChair = new ArrayList<Integer>(5);
+static final int MOTOR_LEFT = 1, MOTOR_RIGHT = 2, MOTOR_CHAIR = 3;
 int lastCmd = 0;
 int lastCmdL = 0;
 int lastCmdR = 0;
 int lastCmdC = 0;
 int cmdLeft = 100, cmdRight = 100, cmdChair = 31;
 int gainLeft = 5, gainRight = 5, gainChair = 5;
-int LEFT_MAX = 750;
-int RIGHT_MAX = 750;
-int CHAIR_MAX = 150;
-float DECEL = 0.95;
-
+static int LEFT_MAX = 750;
+static int RIGHT_MAX = 750;
+static int CHAIR_MAX = 150;
+static float DECEL = 0.8;
+static final int DELTA_THRESHOLD_L = 40, DELTA_THRESHOLD_R = 40, DELTA_THRESHOLD_C = 30;
 void draw(){  
 
+  /* Pressing start exits. */
   if(buttonStart.pressed()){
     println("-1 -1");
     exit();
   }
-  else if(buttonL2.pressed()){
+  
+  /* Check button presses to alter the commands sent to each chair. */
+  if(buttonL2.pressed()){
     cmdChair = constrain(cmdChair - gainChair,0,CHAIR_MAX);
   }
-  else if(buttonR2.pressed()){
+  if(buttonR2.pressed()){
     cmdChair = constrain(cmdChair + gainChair,0,CHAIR_MAX);
   }
-  else if(buttonUp.pressed()){
+  if(buttonUp.pressed()){
     cmdLeft = constrain(cmdLeft + gainLeft,0,LEFT_MAX);
   }
-  else if(buttonDown.pressed()){
+  if(buttonDown.pressed()){
     cmdLeft = constrain(cmdLeft - gainLeft,0,LEFT_MAX);
   }
-  else if(buttonTri.pressed()){
+  if(buttonTri.pressed()){
     cmdRight = constrain(cmdRight + gainRight,0,RIGHT_MAX);
   }
-  else if(buttonX.pressed()){
+  if(buttonX.pressed()){
     cmdRight = constrain(cmdRight - gainRight,0,RIGHT_MAX);
   }
   
@@ -139,6 +148,7 @@ void draw(){
   fill(0,0,255);
   ellipse(600,240,radiusRight,radiusRight);
   
+  /* Delay so we don't que up too many commands to the motors. */
   int now = millis();
   if(now < clock+lastCmd){
     return;
@@ -147,68 +157,117 @@ void draw(){
     clock = now;
   }
   
-  // Send chair command
+  /* Check L1 and R1 buttons.  R1 rotates chair clockwise and L1 rotates counter-clockwise.
+      If both buttons are pressed, prefers L1. 
+      I am not going to allow both button presses to send conflicting commands to the chair motor. */
   if(buttonL1.pressed()){
-    int val = -cmdChair;
-    while(val < 0){
-      println("3 " + val);
-      val = sign(val) * floor(val*DECEL);
-      lastCmdC = -cmdChair;
+    // If the change between current command and last command is larger than some threshold,
+    // Send last command plus threshold.
+    int cmd = -cmdChair;
+    int delta = cmd - lastCmdC;
+    if(abs(delta) > DELTA_THRESHOLD_C){
+      cmd = lastCmdC + sign(delta)*DELTA_THRESHOLD_C;
     }
+    lastCmdC = sendCommand(MOTOR_CHAIR,cmd);
   }
   else if(buttonR1.pressed()){
-    println("3 " + cmdChair);
-    lastCmdC = cmdChair;
+    int cmd = cmdChair;
+    int delta = cmd - lastCmdC;
+    if(abs(delta) > DELTA_THRESHOLD_C){
+      cmd = lastCmdC + sign(delta)*DELTA_THRESHOLD_C;
+    }
+    lastCmdC = sendCommand(3,cmd);
   }
-  else if(abs(lastCmdC) > abs(lastCmdC)){
-    lastCmdC = floor(lastCmdC*DECEL);
-    println("3 " + lastCmdC);
+  // If last command was higher than some arbitrary threshold, send deceleration command.
+  else if(abs(lastCmdC)>32){
+    lastCmdC = sendCommand(MOTOR_CHAIR,round(lastCmdC*DECEL));
   }
   
   // Send left motor command
-  float leftY = stickLeft.getY();
-  int val = round(leftY*cmdLeft);
-  if(abs(val) > abs(lastCmdL)){
-    if(abs(val)>75){
-      println("1 " + -val);
-      lastCmdL = -val;
-    }
+  float leftY = -stickLeft.getY();
+  if(abs(leftY)>0.01){
+    int cmd = floor(leftY*cmdLeft);
+    cmd = round((cmd+lastCmdL)/2);
+    lastCmdL = sendCommand(MOTOR_LEFT,cmd);
   }
-  else if(abs(lastCmdL) > 75){
-    lastCmdL = floor(lastCmdL*DECEL);
-    println("1 " + lastCmdL);
+  // Send decleration
+  else if(abs(lastCmdL)>50){
+    lastCmdL = sendCommand(MOTOR_LEFT,round(lastCmdL*DECEL));
   }
   
   // Send right motor command
-  float rightY = stickRight.getY();
-  val = round(rightY*cmdRight);
-  if(abs(val) > 75){
-    println(2 + " " + -val);
-    lastCmdR = val;
+  float rightY = -stickRight.getY();
+  if(abs(rightY)>0.01){
+    int cmd = floor(rightY*cmdRight);
+    cmd = round((cmd+lastCmdR)/2);
+    lastCmdR = sendCommand(MOTOR_RIGHT,cmd);
   }
-  else if(abs(lastCmdR) > 75){
-    lastCmdR = floor(lastCmdR*DECEL);
-    println("2 " + lastCmdR);
+  // Send deceleration command
+  else if(abs(lastCmdR)>50){
+    lastCmdR = sendCommand(MOTOR_RIGHT,round(lastCmdR*DECEL));
   }
-  lastCmd = floor(max(max(abs(lastCmdL),abs(lastCmdR)),abs(lastCmdC))/2);
+  int[] times = {abs(lastCmdL), abs(lastCmdR), abs(lastCmdC), 60};
+  lastCmd = max(times);
+  //lastCmd = floor(max(max(abs(lastCmdL),abs(lastCmdR)),abs(lastCmdC)));
 }
 
 
 /* Returns the sign of an int */
 public static int sign(int n){
-  int ret = n/abs(n);
-  assert ret == 1 || ret == -1;
-  return ret;
+  if(n==0) return 0;
+  return n/abs(n);
 }
 
-/* Sends commands to the specified motor starting at start argument
-    and ending at the end argument. */
-int DELTA = 10;
-public static int sendCommand(int motor, int start, int end){
-  int diff = end-start;
-  int delta = DELTA * sign(diff);
-  while(start<end){
-    println(motor + " " + start);
-    start += delta;
+/* Sends commands to the specified motor. */
+public static int sendCommand(int motor, int cmd){
+  println(motor + " " + cmd);
+  return cmd;
+}
+
+class Motor{
+  char nline = char(10);
+  int id;
+  int channels;
+  int lastCmd;
+  int cmd;
+  int gain;
+  int max;
+  int capacity;
+  int threshold;
+  float decel = 0.8;
+  ArrayList<Integer> queue;
+  BufferedReader input;
+  BufferedWriter output;
+  public Motor(String in, String out, int id, int numChannels, int val, int m, int g, int cap, int thresh){
+    input = new BufferedReader(new InputStreamReader(in));
+    output = new BufferedWriter(new OutputStreamWriter(out));
+    this.id = id;
+    channels = numChannels;
+    cmd = val;
+    gain = g;
+    max = m;
+    lastCmd = 0;
+    capacity = cap;
+    queue = new ArrayList<Integer>(cap);
+    threshold = thresh;
   }
+  
+  public boolean send(int val, int channel){
+    output.write();
+    output.flush();
+  }
+  
+  public boolean send(int val){
+    for(int i=0; i<channels, i++){
+      send(val,i);
+    }
+  }
+   
+}
+
+public class Printer implements Runnable {
+  public void run() {
+    System.out.println("Hi");
+  }
+  
 }
