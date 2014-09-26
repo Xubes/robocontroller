@@ -1,7 +1,8 @@
 import procontroll.*;
 import java.io.*;
 import processing.serial.*;
-import java.util.ArrayList;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.Scanner;
 
 // Controller stuff
 ControllIO controll;
@@ -97,8 +98,8 @@ int cmdLeft = 100, cmdRight = 100, cmdChair = 31;
 int gainLeft = 5, gainRight = 5, gainChair = 5;
 static int LEFT_MAX = 750;
 static int RIGHT_MAX = 750;
-static int CHAIR_MAX = 150;
-static float DECEL = 0.8;
+static int CHAIR_MAX = 250;
+static float DECEL = 0.5;
 static final int DELTA_THRESHOLD_L = 40, DELTA_THRESHOLD_R = 40, DELTA_THRESHOLD_C = 30;
 void draw(){  
 
@@ -150,7 +151,7 @@ void draw(){
   
   /* Delay so we don't que up too many commands to the motors. */
   int now = millis();
-  if(now < clock+lastCmd){
+  if(now < clock+(lastCmd*2)){
     return;
   }
   else{
@@ -179,8 +180,10 @@ void draw(){
     lastCmdC = sendCommand(3,cmd);
   }
   // If last command was higher than some arbitrary threshold, send deceleration command.
-  else if(abs(lastCmdC)>32){
-    lastCmdC = sendCommand(MOTOR_CHAIR,round(lastCmdC*DECEL));
+  else if(abs(lastCmdC)>0){
+    int ncmd = floor(lastCmdC*DECEL);
+    if(ncmd<30) ncmd = 0;
+    lastCmdC = sendCommand(MOTOR_CHAIR,ncmd);
   }
   
   // Send left motor command
@@ -190,9 +193,11 @@ void draw(){
     cmd = round((cmd+lastCmdL)/2);
     lastCmdL = sendCommand(MOTOR_LEFT,cmd);
   }
-  // Send decleration
-  else if(abs(lastCmdL)>50){
-    lastCmdL = sendCommand(MOTOR_LEFT,round(lastCmdL*DECEL));
+  // Send decleration if motor is still spinning and no new input
+  else if(abs(lastCmdL)>0){
+    int ncmd = floor(lastCmdL*DECEL);
+    if(ncmd<30) ncmd = 0;
+    lastCmdL = sendCommand(MOTOR_LEFT,ncmd);
   }
   
   // Send right motor command
@@ -202,9 +207,11 @@ void draw(){
     cmd = round((cmd+lastCmdR)/2);
     lastCmdR = sendCommand(MOTOR_RIGHT,cmd);
   }
-  // Send deceleration command
-  else if(abs(lastCmdR)>50){
-    lastCmdR = sendCommand(MOTOR_RIGHT,round(lastCmdR*DECEL));
+  // Send deceleration command if motor still spinning and no new input
+  else if(abs(lastCmdR)>0){
+    int ncmd = floor(lastCmdR*DECEL);
+    if(ncmd<30) ncmd = 0;
+    lastCmdR = sendCommand(MOTOR_RIGHT,ncmd);
   }
   int[] times = {abs(lastCmdL), abs(lastCmdR), abs(lastCmdC), 60};
   lastCmd = max(times);
@@ -225,42 +232,51 @@ public static int sendCommand(int motor, int cmd){
 }
 
 class Motor{
-  char nline = char(10);
-  int id;
-  int channels;
-  int lastCmd;
-  int cmd;
+  int id;         // id of the motor
+  int lastCmd;    // last command sent to the motor
+  int power;      // current po 
   int gain;
   int max;
   int capacity;
   int threshold;
   float decel = 0.8;
-  ArrayList<Integer> queue;
-  BufferedReader input;
-  BufferedWriter output;
-  public Motor(String in, String out, int id, int numChannels, int val, int m, int g, int cap, int thresh){
-    input = new BufferedReader(new InputStreamReader(in));
-    output = new BufferedWriter(new OutputStreamWriter(out));
+  ArrayBlockingQueue<Integer> queue;
+  Scanner input;
+  PrintWriter output;
+  
+  public Motor(String in, String out, int id, int val, int m, int g, int cap, int thresh){
+    input = new Scanner(in);
+    try{
+      output = new PrintWriter(out);
+    }
+    catch(FileNotFoundException e){
+      System.err.println("Could not open motor " + id);
+    }
     this.id = id;
-    channels = numChannels;
-    cmd = val;
+    power = val;
     gain = g;
     max = m;
     lastCmd = 0;
     capacity = cap;
-    queue = new ArrayList<Integer>(cap);
+    queue = new ArrayBlockingQueue<Integer>(cap);
     threshold = thresh;
   }
   
-  public boolean send(int val, int channel){
-    output.write();
-    output.flush();
-  }
-  
-  public boolean send(int val){
-    for(int i=0; i<channels, i++){
-      send(val,i);
+  /* Tries to add the value to the queue.
+      Returns true if the value was added, false otherwise. */
+  public boolean queue(int val){
+    if(queue.size()<capacity){
+      queue.add(val);
+      return true;
     }
+    else{
+      return false;
+    }
+  }
+  /* Send value to the motor and wait for response. */
+  public boolean send(int val){
+    output.print(id + " " + val);
+    return true;
   }
    
 }
