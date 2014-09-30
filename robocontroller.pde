@@ -19,6 +19,12 @@ ControllButton buttonDown;
 ControllButton buttonTri;
 ControllButton buttonX;
 
+// Named pipes
+String pnli = "/tmp/pipeli", pnri = "/tmp/piperi", pnci = "/tmp/pipeci";
+ReaderThread inL, inR, inC;
+String pnlo = "/tmp/pipelo", pnro = "/tmp/pipero", pnco = "/tmp/pipeco";
+WriterThread outL, outR, outC;
+
 
 void setup(){
   size(640,480);
@@ -39,6 +45,7 @@ void setup(){
   // Set tolerance
   device.setTolerance(0.1f);
   
+  // Set up analog sticks
   ControllSlider sliderX = device.getSlider(0);
   ControllSlider sliderY = device.getSlider(1);
   ControllSlider sliderZ = device.getSlider(2);
@@ -68,7 +75,7 @@ void setup(){
   17  :
   18  :
   */
-  
+  // Initialize buttons.
   buttonL1 = device.getButton(10);
   buttonR1 = device.getButton(11);
   buttonL2 = device.getButton(8);
@@ -78,18 +85,42 @@ void setup(){
   buttonTri = device.getButton(12);
   buttonX = device.getButton(14);
   buttonStart = device.getButton(3);
+
+  // Open pipes.
+  System.err.println("Opening pipes");
+  try{
+    inL = new ReaderThread(pnli);
+    System.err.println("Opened input left");
+    inR = new ReaderThread(pnri);
+    System.err.println("Opened input right");
+    inC = new ReaderThread(pnci);
+    System.err.println("Opened input chair");
+    outL = new WriterThread(pnlo);
+    System.err.println("Opened output left");
+    outR = new WriterThread(pnro);
+    System.err.println("Opened output right");
+    outC = new WriterThread(pnco);
+    System.err.println("Opened output chair");
+  }
+  catch(FileNotFoundException e){
+    System.err.println(e);
+    return;
+  }
+  catch(SecurityException e){
+    System.err.println(e);
+    return;
+  }
 }
 
 int clock = millis();
 
 // Motor stuff
+Motor L, R, C;
 Serial motorLeft;
 Serial motorRight;
 Serial motorChair;
-ArrayList<Integer> qLeft = new ArrayList<Integer>(5);
-ArrayList<Integer> qRight = new ArrayList<Integer>(5);
-ArrayList<Integer> qChair = new ArrayList<Integer>(5);
 static final int MOTOR_LEFT = 1, MOTOR_RIGHT = 2, MOTOR_CHAIR = 3;
+static final int Q_CAP = 10;
 int lastCmd = 0;
 int lastCmdL = 0;
 int lastCmdR = 0;
@@ -102,7 +133,6 @@ static int CHAIR_MAX = 250;
 static float DECEL = 0.5;
 static final int DELTA_THRESHOLD_L = 40, DELTA_THRESHOLD_R = 40, DELTA_THRESHOLD_C = 30;
 void draw(){  
-
   /* Pressing start exits. */
   if(buttonStart.pressed()){
     println("-1 -1");
@@ -240,50 +270,118 @@ class Motor{
   int capacity;
   int threshold;
   float decel = 0.8;
-  ArrayBlockingQueue<Integer> queue;
-  Scanner input;
-  PrintWriter output;
+  ReaderThread input;
+  WriterThread output;
   
-  public Motor(String in, String out, int id, int val, int m, int g, int cap, int thresh){
-    input = new Scanner(in);
+  public Motor(String in, String out, int val, int m, int g, int cap, int thresh){
     try{
-      output = new PrintWriter(out);
+      input = new ReaderThread(in,cap);
+      input.start();
+      output = new WriterThread(out,cap);
+      output.start();
     }
     catch(FileNotFoundException e){
-      System.err.println("Could not open motor " + id);
+      throw new RuntimeException("Could not open motor " + id);
     }
-    this.id = id;
     power = val;
     gain = g;
     max = m;
     lastCmd = 0;
     capacity = cap;
-    queue = new ArrayBlockingQueue<Integer>(cap);
     threshold = thresh;
+  }
+  
+  /* Waits for next int from input and returns it. 
+      If thread is interrupted, return the lastCmd. */
+  public int read() {
+    try{
+      return input.take();
+    }
+    catch(InterruptedException e){
+      return lastCmd;
+    }
   }
   
   /* Tries to add the value to the queue.
       Returns true if the value was added, false otherwise. */
   public boolean queue(int val){
-    if(queue.size()<capacity){
-      queue.add(val);
-      return true;
-    }
-    else{
-      return false;
-    }
+    return output.puts(val);
   }
-  /* Send value to the motor and wait for response. */
-  public boolean send(int val){
-    output.print(id + " " + val);
-    return true;
-  }
-   
 }
 
-public class Printer implements Runnable {
-  public void run() {
-    System.out.println("Hi");
+class ReaderThread extends Thread {
+  volatile ArrayBlockingQueue<Integer> q;
+  Scanner in;
+  
+  /* Call base constructor with Q_CAP as capacity. */
+  ReaderThread(String fn) throws FileNotFoundException {
+    this(fn,Q_CAP);
   }
   
+  /* Initializes ReaderThread by opening the given filename and a new queue
+      with given capacity. */
+  ReaderThread(String fn, int capacity) throws FileNotFoundException{
+    q = new ArrayBlockingQueue<Integer>(capacity);
+    in = new Scanner(new FileInputStream(fn));
+  }
+  
+  public void run() {
+    while(in.hasNextInt()){
+      int next = in.nextInt();
+      q.offer(next);    // Note that this will drop this command if the queue is full.
+    }
+  }
+  
+  /* Returns next item from queue, waiting if necessary. */
+  public int take() throws InterruptedException {
+    return q.take();
+  }
+  
+  /* Returns number of available items in the queue. */
+  public int available(){
+    return q.size();
+  }
+  
+  /* Returns true if queue has available items, false otherwise. */
+  public boolean hasAvailable(){
+    return q.size() > 0;
+  }
+  
+  public int get() throws RuntimeException{
+    if(q.size()==0){
+      throw new RuntimeException();
+    }
+    return q.poll();
+  }
+}
+
+class WriterThread extends Thread{
+  volatile ArrayBlockingQueue<Integer> q;
+  PrintWriter out;
+  
+  WriterThread(String fn) throws FileNotFoundException {
+    this(fn,Q_CAP);
+  }
+  
+  /* Base constructor. Initializes a queue with given capacity
+      and initializes a PrintWriter to the given file using a 
+      FileOutputStream. */
+  WriterThread(String fn, int capacity) throws FileNotFoundException {
+    out = new PrintWriter(new FileOutputStream(fn),true);
+    q = new ArrayBlockingQueue<Integer>(capacity);
+  }
+  
+  public void run(){
+    if(q.size()>0){
+      out.println(q.poll());
+    }
+    if(isInterrupted()){
+      return;
+    }
+  }
+  
+  /* Add a command to the queue. */
+  public boolean puts(int n){
+    return q.offer(n);
+  }
 }
