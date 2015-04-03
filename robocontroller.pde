@@ -18,6 +18,7 @@ ControllButton buttonUp;
 ControllButton buttonDown;
 ControllButton buttonTri;
 ControllButton buttonX;
+ControllButton buttonLeft, buttonRight, buttonSquare, buttonO;
 
 // Named pipes
 String pnli = "/tmp/pipeli", pnri = "/tmp/piperi", pnci = "/tmp/pipeci";
@@ -85,6 +86,11 @@ void setup() {
   buttonTri = device.getButton(12);
   buttonX = device.getButton(14);
   buttonStart = device.getButton(3);
+  buttonLeft = device.getButton(7);
+  buttonRight = device.getButton(5);
+  buttonSquare = device.getButton(15);
+  buttonO = device.getButton(13);
+  
 
   // Open pipes.
   System.err.println("Opening pipes");
@@ -121,17 +127,21 @@ Serial motorRight;
 Serial motorChair;
 static final int MOTOR_LEFT = 1, MOTOR_RIGHT = 2, MOTOR_CHAIR = 3;
 static final int Q_CAP = 10;
+static final int DEFAULT_CMD_DUR = 10;
+static int turn_duration = 2000;
+static int gain_turn_duration = 10;
 int lastCmd = 0;
 int lastCmdL = 0;
 int lastCmdR = 0;
 int lastCmdC = 0;
-int cmdLeft = 100, cmdRight = 100, cmdChair = 31;
+static int prev_cmd_dur = 0;
+int cmdLeft = 100, cmdRight = 100, cmdChair = 65;
 int gainLeft = 5, gainRight = 5, gainChair = 5;
 static int LEFT_MAX = 750;
 static int RIGHT_MAX = 750;
-static int CHAIR_MAX = 250;
-static float DECEL = 0.5;
-static final int DELTA_THRESHOLD_L = 40, DELTA_THRESHOLD_R = 40, DELTA_THRESHOLD_C = 30;
+static int CHAIR_MAX = 100;
+static float DECEL = 0.3;
+static final int DELTA_THRESHOLD_L = 20, DELTA_THRESHOLD_R = 20, DELTA_THRESHOLD_C = 30;
 void draw() {  
   /* Pressing start exits. */
   if (buttonStart.pressed()) {
@@ -158,6 +168,13 @@ void draw() {
   if (buttonX.pressed()) {
     cmdRight = constrain(cmdRight - gainRight, 0, RIGHT_MAX);
   }
+  if (buttonO.pressed()){
+    turn_duration += gain_turn_duration;
+  }
+  if (buttonSquare.pressed()){
+    turn_duration = max(10,turn_duration-gain_turn_duration);
+    
+  }
 
   // Draw configs to window.
   // left motor on left side
@@ -166,22 +183,32 @@ void draw() {
   stroke(255, 0, 0);
   fill(255, 0, 0);
   ellipse(100, 240, radiusLeft, radiusLeft);
+  fill(255,255,255);
+  text(cmdLeft,75,200);
 
   //chair at center
   int radiusChair = round(map(cmdChair, 0, 1000, 0, 100));
   stroke(0, 255, 0);
   fill(0, 255, 0);
   ellipse(300, 240, radiusChair, radiusChair);
+  fill(255,255,255);
+  text(cmdChair,275,200);
 
   //right motor on right size
   int radiusRight = round(map(cmdRight, 0, 1000, 0, 100));
   stroke(0, 0, 255);
   fill(0, 0, 255);
   ellipse(600, 240, radiusRight, radiusRight);
+  fill(255,255,255);
+  text(cmdRight,575,200);
 
+  // Draw turn command duration
+  fill(0,255,0);
+  text(turn_duration,10,100);
+  
   /* Delay so we don't que up too many commands to the motors. */
   int now = millis();
-  if (now < clock+(lastCmd*2)) {
+  if (now < clock+prev_cmd_dur) {
     return;
   } else {
     clock = now;
@@ -206,7 +233,20 @@ void draw() {
       cmd = lastCmdC + sign(delta)*DELTA_THRESHOLD_C;
     }
     lastCmdC = sendCommand(3, cmd);
+  } else if (buttonLeft.pressed()){
+    // Rotate chair 180 ccw
+    lastCmdC = sendCommand(MOTOR_CHAIR, -65, turn_duration);
+    delay(2000);
+    lastCmdC = sendCommand(MOTOR_CHAIR, 0);
+
+  } else if (buttonRight.pressed()){
+    // Rotate chair 180 cw
+    lastCmdC = sendCommand(MOTOR_CHAIR, 65, turn_duration);
+    delay(2000);
+    lastCmdC = sendCommand(MOTOR_CHAIR, 0);
   }
+   
+    
   // If last command was higher than some arbitrary threshold, send deceleration command.
   else if (abs(lastCmdC)>0) {
     int ncmd = floor(lastCmdC*DECEL);
@@ -256,20 +296,29 @@ public static int sign(int n) {
 }
 
 /* Sends commands to the specified motor. */
-public static int sendCommand(int motor, int cmd) {
-  println(motor + " " + cmd);
+public static int sendCommand(int motor, int cmd, int dur) {
+  //System.out.printf("%d %d %d\n",motor,cmd,dur);
+  System.out.println(motor + " " + cmd + " " + dur);
+  prev_cmd_dur = dur;
   return cmd;
+}
+
+/* Sends command and default duration to motor. */
+public static int sendCommand(int motor, int cmd){
+  return sendCommand(motor, cmd, DEFAULT_CMD_DUR);
 }
 
 class Motor {
   int id;         // id of the motor
   int lastCmd;    // last command sent to the motor
-  int power;      // current po 
+  int power;      // current power
   int gain;
   int maxPower;
   int capacity;
   int threshold;
   float decel = 0.8;
+  int lastCmdTime = 0;
+  
   ReaderThread input;
   WriterThread output;
 
@@ -279,7 +328,7 @@ class Motor {
     try {
       input = new ReaderThread(in, capacity);
       input.start();
-      output = new WriterThread(out, capacity);
+      output = new WriterThread(out, capacity, 0);
       output.start();
     }
     catch(FileNotFoundException e) {
@@ -363,23 +412,26 @@ class ReaderThread extends Thread {
 class WriterThread extends Thread {
   volatile ArrayBlockingQueue<Integer> q;
   PrintWriter out;
+  int PRINT_INTERVAL = 10;  // milliseconds between writes.
+  int prevWriteTime;
 
   WriterThread(String fn) throws FileNotFoundException {
-    this(fn, Q_CAP);
+    this(fn, Q_CAP,0);
   }
 
   /* Base constructor. Initializes a queue with given capacity
    and initializes a PrintWriter to the given file using a 
    FileOutputStream. */
-  WriterThread(String fn, int capacity) throws FileNotFoundException {
+  WriterThread(String fn, int capacity, int prevTime) throws FileNotFoundException {
     out = new PrintWriter(new FileOutputStream(fn), true);
     q = new ArrayBlockingQueue<Integer>(capacity);
+    prevWriteTime = prevTime;
   }
   
   /* Run method for this thread.
      Writes commands from queue to pipe. */
   public void run() {
-    if (q.size()>0) {
+    if (q.size()>0 && (millis()-prevWriteTime)>PRINT_INTERVAL) {
       out.println(q.poll());
     }
     if (isInterrupted()) {
