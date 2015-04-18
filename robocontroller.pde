@@ -7,34 +7,19 @@ import java.util.Scanner;
 // Controller stuff
 ControllIO controll;
 ControllDevice device;
-ControllStick stickLeft;
-ControllStick stickRight;
-ControllButton buttonL1;
-ControllButton buttonR1;
+
+//analog sticks
+ControllStick stickLeft, stickRight;
+
+//buttons
 ControllButton buttonStart;
-ControllButton buttonR2;
-ControllButton buttonL2;
-ControllButton buttonUp;
-ControllButton buttonDown;
-ControllButton buttonTri;
-ControllButton buttonX;
-ControllButton buttonLeft, buttonRight, buttonSquare, buttonO;
-
-// Named pipes
-String pnli = "/tmp/pipeli", pnri = "/tmp/piperi", pnci = "/tmp/pipeci";
-ReaderThread inL, inR, inC;
-String pnlo = "/tmp/pipelo", pnro = "/tmp/pipero", pnco = "/tmp/pipeco";
-WriterThread outL, outR, outC;
-
+ControllButton buttonL1, buttonR1, buttonL2, buttonR2;
+ControllButton buttonUp, buttonDown, buttonLeft, buttonRight;
+ControllButton buttonTri, buttonX, buttonSquare, buttonO;
 
 void setup() {
   size(640, 480);
   textSize(32);
-  //println(Serial.list());
-
-  //motorChair = new Serial(this,"/dev/tty.usbmodemfd1211");
-  //motorLeft = new Serial(this,"/dev/tty.usbmodemRTQ0011");
-  //motorRight = new Serial(this,"/dev/tty.usbmodem9");
 
   controll = ControllIO.getInstance(this);
   //controll.printDevices();
@@ -90,45 +75,18 @@ void setup() {
   buttonRight = device.getButton(5);
   buttonSquare = device.getButton(15);
   buttonO = device.getButton(13);
-  
-
-  // Open pipes.
-  System.err.println("Opening pipes");
-  try {
-    inL = new ReaderThread(pnli);
-    System.err.println("Opened input left");
-    inR = new ReaderThread(pnri);
-    System.err.println("Opened input right");
-    inC = new ReaderThread(pnci);
-    System.err.println("Opened input chair");
-    outL = new WriterThread(pnlo);
-    System.err.println("Opened output left");
-    outR = new WriterThread(pnro);
-    System.err.println("Opened output right");
-    outC = new WriterThread(pnco);
-    System.err.println("Opened output chair");
-  }
-  catch(FileNotFoundException e) {
-    System.err.println(e);
-    return;
-  }
-  catch(SecurityException e) {
-    System.err.println(e);
-    return;
-  }
 }
 
 int clock = millis();
 
 // Motor stuff
-Motor L, R, C;
 Serial motorLeft;
 Serial motorRight;
 Serial motorChair;
 static final int MOTOR_LEFT = 1, MOTOR_RIGHT = 2, MOTOR_CHAIR = 3;
 static final int Q_CAP = 10;
 static final int DEFAULT_CMD_DUR = 25;
-static int turn_duration = 2000;
+static int turn_duration = 3600;
 static int gain_turn_duration = 10;
 int lastCmd = 0;
 int lastCmdL = 0;
@@ -142,6 +100,14 @@ static int RIGHT_MAX = 1000;
 static int CHAIR_MAX = 250;
 static float DECEL = 0.3;
 static final int DELTA_THRESHOLD_L = 20, DELTA_THRESHOLD_R = 20, DELTA_THRESHOLD_C = 30;
+
+// Store times for previous config changes to make it easier to set the correct values for commands.
+int last_chair_adjust = millis(), last_left_adjust = millis(), last_right_adjust = millis();
+int last_duration_adjust = millis();
+// Set the interval between button presses before configs are updated.
+static final int ADJUST_INTERVAL = 150;
+
+// Main routine
 void draw() {  
   /* Pressing start exits. */
   if (buttonStart.pressed()) {
@@ -149,31 +115,53 @@ void draw() {
     exit();
   }
 
-  /* Check button presses to alter the commands sent to each chair. */
-  if (buttonL2.pressed()) {
-    cmdChair = constrain(cmdChair - gainChair, 0, CHAIR_MAX);
+  /* Check button presses to alter the commands sent to chair. */
+  if (millis()-last_chair_adjust > ADJUST_INTERVAL){
+    if (buttonL2.pressed()) {
+      cmdChair = constrain(cmdChair - gainChair, 0, CHAIR_MAX);
+      last_chair_adjust = millis();
+    }
+    else if (buttonR2.pressed()) {
+      cmdChair = constrain(cmdChair + gainChair, 0, CHAIR_MAX);
+      last_chair_adjust = millis();
+    }
   }
-  if (buttonR2.pressed()) {
-    cmdChair = constrain(cmdChair + gainChair, 0, CHAIR_MAX);
+  
+  /* Check for config changes to left motor. */
+  if (millis()-last_left_adjust > ADJUST_INTERVAL){
+    if (buttonUp.pressed()) {
+      cmdLeft = constrain(cmdLeft + gainLeft, 0, LEFT_MAX);
+      last_left_adjust = millis();
+    }
+    else if (buttonDown.pressed()) {
+      cmdLeft = constrain(cmdLeft - gainLeft, 0, LEFT_MAX);
+      last_left_adjust = millis();
+    }
   }
-  if (buttonUp.pressed()) {
-    cmdLeft = constrain(cmdLeft + gainLeft, 0, LEFT_MAX);
+  
+  /* Check for config changes to right motor. */
+  if(millis()-last_right_adjust > ADJUST_INTERVAL){
+    if (buttonTri.pressed()) {
+      cmdRight = constrain(cmdRight + gainRight, 0, RIGHT_MAX);
+      last_right_adjust = millis();
+    }
+    if (buttonX.pressed()) {
+      cmdRight = constrain(cmdRight - gainRight, 0, RIGHT_MAX);
+      last_right_adjust = millis();
+    }
   }
-  if (buttonDown.pressed()) {
-    cmdLeft = constrain(cmdLeft - gainLeft, 0, LEFT_MAX);
-  }
-  if (buttonTri.pressed()) {
-    cmdRight = constrain(cmdRight + gainRight, 0, RIGHT_MAX);
-  }
-  if (buttonX.pressed()) {
-    cmdRight = constrain(cmdRight - gainRight, 0, RIGHT_MAX);
-  }
-  if (buttonO.pressed()){
-    turn_duration += gain_turn_duration;
-  }
-  if (buttonSquare.pressed()){
-    turn_duration = max(10,turn_duration-gain_turn_duration);
-    
+
+  
+  /* Check for changes to command duration. */
+  if(millis()-last_duration_adjust > ADJUST_INTERVAL){
+    if (buttonO.pressed()){
+      turn_duration += gain_turn_duration;
+      last_duration_adjust = millis();
+    }
+    if (buttonSquare.pressed()){
+      turn_duration = max(10,turn_duration-gain_turn_duration);
+      last_duration_adjust = millis();
+    }
   }
 
   // Draw configs to window.
@@ -306,142 +294,5 @@ public static int sendCommand(int motor, int cmd, int dur) {
 /* Sends command and default duration to motor. */
 public static int sendCommand(int motor, int cmd){
   return sendCommand(motor, cmd, DEFAULT_CMD_DUR);
-}
-
-class Motor {
-  int id;         // id of the motor
-  int lastCmd;    // last command sent to the motor
-  int power;      // current power
-  int gain;
-  int maxPower;
-  int capacity;
-  int threshold;
-  float decel = 0.8;
-  int lastCmdTime = 0;
-  
-  ReaderThread input;
-  WriterThread output;
-
-  /* Base constructor. */
-  public Motor(String in, String out, int power, int gain, int maxPower, int lastCmd, int threshold, int capacity) {
-    this.capacity = capacity;
-    try {
-      input = new ReaderThread(in, capacity);
-      input.start();
-      output = new WriterThread(out, capacity, 0);
-      output.start();
-    }
-    catch(FileNotFoundException e) {
-      throw new RuntimeException("Could not open motor " + id);
-    }
-    this.power = power;
-    this.gain = gain;
-    this.maxPower = maxPower;
-    this.lastCmd = lastCmd;
-    this.threshold = threshold;
-  }
-
-  /* Waits for next int from input and returns it. 
-   If thread is interrupted, return the lastCmd. */
-  public int read() {
-    try {
-      return input.take();
-    }
-    catch(InterruptedException e) {
-      return lastCmd;
-    }
-  }
-
-  /* Tries to add the value to the queue.
-   Returns true if the value was added, false otherwise. */
-  public boolean queue(int val) {
-    return output.puts(val);
-  }
-    /* Set a new threshold. */
-  public void setThreshold(int th){
-    threshold = th;
-  }
-}
-
-class ReaderThread extends Thread {
-  volatile ArrayBlockingQueue<Integer> q;
-  Scanner in;
-
-  /* Call base constructor with Q_CAP as capacity. */
-  ReaderThread(String fn) throws FileNotFoundException {
-    this(fn, Q_CAP);
-  }
-
-  /* Initializes ReaderThread by opening the given filename and a new queue
-   with given capacity. */
-  ReaderThread(String fn, int capacity) throws FileNotFoundException {
-    q = new ArrayBlockingQueue<Integer>(capacity);
-    in = new Scanner(new FileInputStream(fn));
-  }
-
-  public void run() {
-    while (in.hasNextInt ()) {
-      int next = in.nextInt();
-      q.offer(next);    // Note that this will drop this command if the queue is full.
-    }
-  }
-
-  /* Returns next item from queue, waiting if necessary. */
-  public int take() throws InterruptedException {
-    return q.take();
-  }
-
-  /* Returns number of available items in the queue. */
-  public int available() {
-    return q.size();
-  }
-
-  /* Returns true if queue has available items, false otherwise. */
-  public boolean hasAvailable() {
-    return q.size() > 0;
-  }
-
-  public int get() throws RuntimeException {
-    if (q.size()==0) {
-      throw new RuntimeException();
-    }
-    return q.poll();
-  }
-}
-
-class WriterThread extends Thread {
-  volatile ArrayBlockingQueue<Integer> q;
-  PrintWriter out;
-  int PRINT_INTERVAL = 10;  // milliseconds between writes.
-  int prevWriteTime;
-
-  WriterThread(String fn) throws FileNotFoundException {
-    this(fn, Q_CAP,0);
-  }
-
-  /* Base constructor. Initializes a queue with given capacity
-   and initializes a PrintWriter to the given file using a 
-   FileOutputStream. */
-  WriterThread(String fn, int capacity, int prevTime) throws FileNotFoundException {
-    out = new PrintWriter(new FileOutputStream(fn), true);
-    q = new ArrayBlockingQueue<Integer>(capacity);
-    prevWriteTime = prevTime;
-  }
-  
-  /* Run method for this thread.
-     Writes commands from queue to pipe. */
-  public void run() {
-    if (q.size()>0 && (millis()-prevWriteTime)>PRINT_INTERVAL) {
-      out.println(q.poll());
-    }
-    if (isInterrupted()) {
-      return;
-    }
-  }
-
-  /* Add a command to the queue. */
-  public boolean puts(int n) {
-    return q.offer(n);
-  }
 }
 
