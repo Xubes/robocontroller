@@ -127,7 +127,7 @@ Serial motorRight;
 Serial motorChair;
 static final int MOTOR_LEFT = 1, MOTOR_RIGHT = 2, MOTOR_CHAIR = 3;
 static final int Q_CAP = 10;
-static final int DEFAULT_CMD_DUR = 10;
+static final int DEFAULT_CMD_DUR = 25;
 static int turn_duration = 2000;
 static int gain_turn_duration = 10;
 int lastCmd = 0;
@@ -137,9 +137,9 @@ int lastCmdC = 0;
 static int prev_cmd_dur = 0;
 int cmdLeft = 100, cmdRight = 100, cmdChair = 65;
 int gainLeft = 5, gainRight = 5, gainChair = 5;
-static int LEFT_MAX = 750;
-static int RIGHT_MAX = 750;
-static int CHAIR_MAX = 100;
+static int LEFT_MAX = 1000;
+static int RIGHT_MAX = 1000;
+static int CHAIR_MAX = 250;
 static float DECEL = 0.3;
 static final int DELTA_THRESHOLD_L = 20, DELTA_THRESHOLD_R = 20, DELTA_THRESHOLD_C = 30;
 void draw() {  
@@ -236,14 +236,14 @@ void draw() {
   } else if (buttonLeft.pressed()){
     // Rotate chair 180 ccw
     lastCmdC = sendCommand(MOTOR_CHAIR, -65, turn_duration);
-    delay(2000);
-    lastCmdC = sendCommand(MOTOR_CHAIR, 0);
+    delay(500);
+    lastCmdC = sendCommand(MOTOR_CHAIR, 0, 25); // brake
 
   } else if (buttonRight.pressed()){
     // Rotate chair 180 cw
     lastCmdC = sendCommand(MOTOR_CHAIR, 65, turn_duration);
-    delay(2000);
-    lastCmdC = sendCommand(MOTOR_CHAIR, 0);
+    delay(500);
+    lastCmdC = sendCommand(MOTOR_CHAIR, 0, 25); // brake
   }
    
     
