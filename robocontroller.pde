@@ -194,7 +194,7 @@ void draw() {
   fill(0,255,0);
   text(turn_duration,10,100);
   
-  /* Delay so we don't que up too many commands to the motors. */
+  /* Delay so we don't queue up too many commands to the motors. */
   int now = millis();
   if (now < clock+prev_cmd_dur) {
     return;
